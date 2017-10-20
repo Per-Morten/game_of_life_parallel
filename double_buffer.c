@@ -62,7 +62,6 @@ sdl_shutdown(SDL_Window* window,
     SDL_Quit();
 }
 
-
 typedef bool cell;
 
 bool
@@ -92,8 +91,8 @@ handle_events(cell** grid,
             const int selected_x = event.button.x / CELL_WIDTH;
             const int selected_y = event.button.y / CELL_HEIGHT;
 
-            if (selected_x >= 0 && selected_x < rows &&
-                selected_y >= 0 && selected_y < cols)
+            if (selected_x >= 0 && selected_x < (int)rows &&
+                selected_y >= 0 && selected_y < (int)cols)
             {
                 grid[selected_x][selected_y] = !grid[selected_x][selected_y];
             }
@@ -133,7 +132,7 @@ destroy_grid(cell** cells,
              const size_t rows)
 {
     --cells;
-    for (size_t i = 0; i != rows; ++i)
+    for (size_t i = 0; i != rows + 2; ++i)
         free(--cells[i]);
     free(cells);
 }
@@ -186,6 +185,53 @@ draw_grid(cell** grid,
                            prev_color.a);
 }
 
+void
+update_grid(cell** restrict curr,
+            cell** restrict prev,
+            const size_t rows,
+            const size_t cols)
+{
+    // Rules from: https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
+    // Any live cell with fewer than two live neighbours dies, as if caused by underpopulation.
+    // Any live cell with two or three live neighbours lives on to the next generation.
+    // Any live cell with more than three live neighbours dies, as if by overpopulation.
+    // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
+    for (size_t i = 0; i != rows; ++i)
+    {
+        for (size_t j = 0; j != cols; ++j)
+        {
+            int alive_neighbors = 0;
+
+            // Above
+            alive_neighbors += prev[i - 1][j - 1];
+            alive_neighbors += prev[i - 1][j];
+            alive_neighbors += prev[i - 1][j + 1];
+
+            // Side
+            alive_neighbors += prev[i][j - 1];
+            alive_neighbors += prev[i][j + 1];
+
+            // Below
+            alive_neighbors += prev[i + 1][j - 1];
+            alive_neighbors += prev[i + 1][j];
+            alive_neighbors += prev[i + 1][j + 1];
+
+            if (prev[i][j])
+            {
+                if (alive_neighbors < 2)
+                    curr[i][j] = false;
+                if (alive_neighbors == 2 || alive_neighbors == 3)
+                    curr[i][j] = true;
+                if (alive_neighbors > 3)
+                    curr[i][j] = false;
+            }
+            else if (alive_neighbors == 3)
+            {
+                curr[i][j] = true;
+            }
+        }
+    }
+}
 
 int
 main(int argc, char** argv)
@@ -195,28 +241,37 @@ main(int argc, char** argv)
     if (!sdl_init(&window, &renderer, WINDOW_WIDTH, WINDOW_HEIGHT))
         return 1;
 
-    cell** grid = create_grid(CELL_COUNT, CELL_COUNT);
+    cell** prev_grid = create_grid(CELL_COUNT, CELL_COUNT);
+    cell** curr_grid = create_grid(CELL_COUNT, CELL_COUNT);
+    copy_grid(prev_grid, curr_grid, CELL_COUNT, CELL_COUNT);
 
     bool should_continue = true;
     bool iterate = false;
     while (should_continue)
     {
-        should_continue = handle_events(grid, CELL_COUNT,
+        should_continue = handle_events(curr_grid, CELL_COUNT,
                                         CELL_COUNT, &iterate);
 
+        if (iterate)
+            update_grid(curr_grid, prev_grid, CELL_COUNT, CELL_COUNT);
+
+        copy_grid(prev_grid, curr_grid, CELL_COUNT, CELL_COUNT);
+
         SDL_RenderClear(renderer);
-        draw_grid(grid,
+        draw_grid(prev_grid,
                   CELL_COUNT,
                   CELL_COUNT,
                   renderer);
 
         SDL_RenderPresent(renderer);
 
-        SDL_Delay(30);
+        SDL_Delay(60);
     }
 
 
-    destroy_grid(grid, CELL_COUNT);
+    destroy_grid(prev_grid, CELL_COUNT);
+    destroy_grid(curr_grid, CELL_COUNT);
+
     sdl_shutdown(window, renderer);
 
     return 0;
