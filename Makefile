@@ -1,6 +1,9 @@
 .PHONY: clean
 clean:
-	rm -f ./double_buffer ./double_buffer_leak ./single_threaded
+	rm -f ./double_buffer ./double_buffer_leak ./single_threaded ./cond_double_buffer
+
+cond_double_buffer: cond_double_buffer.c
+	gcc -std=c11 -O3 -Wall -Wextra cond_double_buffer.c -o cond_double_buffer -lSDL2 -lpthread
 
 double_buffer: double_buffer.c
 	gcc -std=c11 -O3 -Wall -Wextra double_buffer.c -o double_buffer -lSDL2 -lpthread
@@ -15,6 +18,10 @@ run_single_threaded: clean single_threaded
 .PHONY: run_double_buffer
 run_double_buffer: clean double_buffer
 	./double_buffer
+
+.PHONY: run_cond_double_buffer
+run_cond_double_buffer: clean cond_double_buffer
+	./cond_double_buffer
 
 .PHONY: clean leak_double_buffer
 leak_double_buffer:
