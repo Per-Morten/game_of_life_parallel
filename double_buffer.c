@@ -249,12 +249,6 @@ sub_update(void* params)
     return NULL;
 }
 
-void*
-thread_execution(void* params)
-{
-
-}
-
 void
 update_grid(cell** restrict curr,
             cell** restrict prev,
