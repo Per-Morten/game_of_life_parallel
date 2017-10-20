@@ -105,6 +105,8 @@ cell**
 create_grid(const size_t rows,
             const size_t cols)
 {
+    // Creating an outer layer for the grid,
+    // allowing us to drop the bounds checking.
     const size_t outer_rows = rows + 2;
     const size_t outer_cols = cols + 2;
 
@@ -115,10 +117,9 @@ create_grid(const size_t rows,
         cells[i]++;
     }
 
-    // Increment outer to inner layer, allows us to go out of bounds.
     cells++;
 
-    // Randomize
+    // Set an initial state
     for (size_t i = 0; i != rows; ++i)
         for (size_t j = 0; j != cols; ++j)
             cells[i][j] = (j + 1) % 2 == 0;
@@ -160,20 +161,24 @@ draw_grid(cell** grid,
                            &prev_color.a);
 
     SDL_SetRenderDrawColor(renderer, 0, 128, 255, 255);
+
     for (size_t i = 0; i != rows; ++i)
     {
         for (size_t j = 0; j != cols; ++j)
         {
-            SDL_Rect rect =
-            {
-                .x = i * CELL_WIDTH + BORDER_WIDTH,
-                .y = j * CELL_HEIGHT + BORDER_WIDTH,
-                .w = CELL_WIDTH - (BORDER_WIDTH * 2),
-                .h = CELL_WIDTH - (BORDER_WIDTH * 2),
-            };
-
             if (grid[i][j])
+            {
+                SDL_Rect rect =
+                {
+                    .x = i * CELL_WIDTH + BORDER_WIDTH,
+                    .y = j * CELL_HEIGHT + BORDER_WIDTH,
+                    .w = CELL_WIDTH - (BORDER_WIDTH * 2),
+                    .h = CELL_WIDTH - (BORDER_WIDTH * 2),
+                };
+
                 SDL_RenderFillRect(renderer, &rect);
+            }
+
         }
     }
 
@@ -201,16 +206,16 @@ update_grid(cell** restrict curr,
         {
             int alive_neighbors = 0;
 
-            // Above
+            // left side
             alive_neighbors += prev[i - 1][j - 1];
             alive_neighbors += prev[i - 1][j];
             alive_neighbors += prev[i - 1][j + 1];
 
-            // Side
+            // above below
             alive_neighbors += prev[i][j - 1];
             alive_neighbors += prev[i][j + 1];
 
-            // Below
+            // right side
             alive_neighbors += prev[i + 1][j - 1];
             alive_neighbors += prev[i + 1][j];
             alive_neighbors += prev[i + 1][j + 1];

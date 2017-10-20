@@ -9,6 +9,7 @@
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 800
 #define CELL_COUNT (WINDOW_WIDTH / CELL_WIDTH)
+#define THREAD_COUNT 4
 
 int
 sdl_init(SDL_Window** out_window,
@@ -106,6 +107,8 @@ cell**
 create_grid(const size_t rows,
             const size_t cols)
 {
+    // Creating an outer layer for the grid,
+    // allowing us to drop the bounds checking.
     const size_t outer_rows = rows + 2;
     const size_t outer_cols = cols + 2;
 
@@ -116,10 +119,9 @@ create_grid(const size_t rows,
         cells[i]++;
     }
 
-    // Increment outer to inner layer, allows us to go out of bounds.
     cells++;
 
-    // Randomize
+    // Set an initial state
     for (size_t i = 0; i != rows; ++i)
         for (size_t j = 0; j != cols; ++j)
             cells[i][j] = (j + 1) % 2 == 0;
@@ -131,6 +133,7 @@ void
 destroy_grid(cell** cells,
              const size_t rows)
 {
+    // Move out to outer layer to delete properly.
     --cells;
     for (size_t i = 0; i != rows + 2; ++i)
         free(--cells[i]);
@@ -166,16 +169,19 @@ draw_grid(cell** grid,
     {
         for (size_t j = 0; j != cols; ++j)
         {
-            SDL_Rect rect =
-            {
-                .x = i * CELL_WIDTH + BORDER_WIDTH,
-                .y = j * CELL_HEIGHT + BORDER_WIDTH,
-                .w = CELL_WIDTH - (BORDER_WIDTH * 2),
-                .h = CELL_WIDTH - (BORDER_WIDTH * 2),
-            };
-
             if (grid[i][j])
+            {
+                SDL_Rect rect =
+                {
+                    .x = i * CELL_WIDTH + BORDER_WIDTH,
+                    .y = j * CELL_HEIGHT + BORDER_WIDTH,
+                    .w = CELL_WIDTH - (BORDER_WIDTH * 2),
+                    .h = CELL_WIDTH - (BORDER_WIDTH * 2),
+                };
+
                 SDL_RenderFillRect(renderer, &rect);
+            }
+
         }
     }
 
@@ -210,16 +216,16 @@ sub_update(void* params)
         {
             int alive_neighbors = 0;
 
-            // Above
+            // left side
             alive_neighbors += args.prev[i - 1][j - 1];
             alive_neighbors += args.prev[i - 1][j];
             alive_neighbors += args.prev[i - 1][j + 1];
 
-            // Side
+            // above below
             alive_neighbors += args.prev[i][j - 1];
             alive_neighbors += args.prev[i][j + 1];
 
-            // Below
+            // right side
             alive_neighbors += args.prev[i + 1][j - 1];
             alive_neighbors += args.prev[i + 1][j];
             alive_neighbors += args.prev[i + 1][j + 1];
@@ -249,10 +255,11 @@ update_grid(cell** restrict curr,
             const size_t rows,
             const size_t cols)
 {
-    pthread_t threads[3];
-    thread_params params[4];
+    // Using main thread as well for calculations hence -1
+    pthread_t threads[THREAD_COUNT - 1];
+    thread_params params[THREAD_COUNT];
 
-    for (size_t i = 0; i < 4; ++i)
+    for (size_t i = 0; i != THREAD_COUNT; ++i)
     {
         params[i].curr = curr;
         params[i].prev = prev;
@@ -261,12 +268,12 @@ update_grid(cell** restrict curr,
         params[i].cols = cols;
     }
 
-    for (size_t i = 0; i < 3; ++i)
+    for (size_t i = 0; i < THREAD_COUNT - 1; ++i)
         pthread_create(&threads[i], NULL, sub_update, &params[i + 1]);
 
     sub_update(&params[0]);
 
-    for (size_t i = 0; i < 3; ++i)
+    for (size_t i = 0; i < THREAD_COUNT - 1; ++i)
         pthread_join(threads[i], NULL);
 }
 
