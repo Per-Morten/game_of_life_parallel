@@ -110,31 +110,31 @@ create_grid(const size_t rows,
     const size_t outer_rows = rows + 2;
     const size_t outer_cols = cols + 2;
 
-    cell** cells = calloc(outer_rows, sizeof(cell*));
+    cell** grid = calloc(outer_rows, sizeof(cell*));
     for (size_t i = 0; i != outer_rows; ++i)
     {
-        cells[i] = calloc(outer_cols, sizeof(cell));
-        cells[i]++;
+        grid[i] = calloc(outer_cols, sizeof(cell));
+        grid[i]++;
     }
 
-    cells++;
+    grid++;
 
     // Set an initial state
     for (size_t i = 0; i != rows; ++i)
         for (size_t j = 0; j != cols; ++j)
-            cells[i][j] = (j + 1) % 2 == 0;
+            grid[i][j] = (j + 1) % 2 == 0;
 
-    return cells;
+    return grid;
 }
 
 void
-destroy_grid(cell** cells,
+destroy_grid(cell** grid,
              const size_t rows)
 {
-    --cells;
+    --grid;
     for (size_t i = 0; i != rows + 2; ++i)
-        free(--cells[i]);
-    free(cells);
+        free(--grid[i]);
+    free(grid);
 }
 
 void
