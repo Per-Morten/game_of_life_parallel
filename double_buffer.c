@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <SDL2/SDL.h>
+#include <pthread.h>
 
 #define BORDER_WIDTH 1
 #define CELL_WIDTH 10
@@ -115,7 +116,6 @@ create_grid(const size_t rows,
         cells[i]++;
     }
 
-
     // Increment outer to inner layer, allows us to go out of bounds.
     cells++;
 
@@ -161,6 +161,7 @@ draw_grid(cell** grid,
                            &prev_color.a);
 
     SDL_SetRenderDrawColor(renderer, 0, 128, 255, 255);
+
     for (size_t i = 0; i != rows; ++i)
     {
         for (size_t j = 0; j != cols; ++j)
@@ -185,52 +186,88 @@ draw_grid(cell** grid,
                            prev_color.a);
 }
 
-void
-update_grid(cell** restrict curr,
-            cell** restrict prev,
-            const size_t rows,
-            const size_t cols)
+typedef struct
+{
+    cell** restrict curr;
+    cell** restrict prev;
+    size_t row_begin;
+    size_t row_end;
+    size_t cols;
+} thread_params;
+
+void*
+sub_update(void* params)
 {
     // Rules from: https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
     // Any live cell with fewer than two live neighbours dies, as if caused by underpopulation.
     // Any live cell with two or three live neighbours lives on to the next generation.
     // Any live cell with more than three live neighbours dies, as if by overpopulation.
     // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
-    for (size_t i = 0; i != rows; ++i)
+    thread_params args = *(thread_params*)params;
+    for (size_t i = args.row_begin; i != args.row_end; ++i)
     {
-        for (size_t j = 0; j != cols; ++j)
+        for (size_t j = 0; j != args.cols; ++j)
         {
             int alive_neighbors = 0;
 
             // Above
-            alive_neighbors += prev[i - 1][j - 1];
-            alive_neighbors += prev[i - 1][j];
-            alive_neighbors += prev[i - 1][j + 1];
+            alive_neighbors += args.prev[i - 1][j - 1];
+            alive_neighbors += args.prev[i - 1][j];
+            alive_neighbors += args.prev[i - 1][j + 1];
 
             // Side
-            alive_neighbors += prev[i][j - 1];
-            alive_neighbors += prev[i][j + 1];
+            alive_neighbors += args.prev[i][j - 1];
+            alive_neighbors += args.prev[i][j + 1];
 
             // Below
-            alive_neighbors += prev[i + 1][j - 1];
-            alive_neighbors += prev[i + 1][j];
-            alive_neighbors += prev[i + 1][j + 1];
+            alive_neighbors += args.prev[i + 1][j - 1];
+            alive_neighbors += args.prev[i + 1][j];
+            alive_neighbors += args.prev[i + 1][j + 1];
 
-            if (prev[i][j])
+            if (args.prev[i][j])
             {
                 if (alive_neighbors < 2)
-                    curr[i][j] = false;
+                    args.curr[i][j] = false;
                 if (alive_neighbors == 2 || alive_neighbors == 3)
-                    curr[i][j] = true;
+                    args.curr[i][j] = true;
                 if (alive_neighbors > 3)
-                    curr[i][j] = false;
+                    args.curr[i][j] = false;
             }
             else if (alive_neighbors == 3)
             {
-                curr[i][j] = true;
+                args.curr[i][j] = true;
             }
         }
     }
+
+    return NULL;
+}
+
+void
+update_grid(cell** restrict curr,
+            cell** restrict prev,
+            const size_t rows,
+            const size_t cols)
+{
+    pthread_t threads[3];
+    thread_params params[4];
+
+    for (size_t i = 0; i < 4; ++i)
+    {
+        params[i].curr = curr;
+        params[i].prev = prev;
+        params[i].row_begin = (rows / 4) * i;
+        params[i].row_end = (rows / 4) * (i + 1);
+        params[i].cols = cols;
+    }
+
+    for (size_t i = 0; i < 3; ++i)
+        pthread_create(&threads[i], NULL, sub_update, &params[i + 1]);
+
+    sub_update(&params[0]);
+
+    for (size_t i = 0; i < 3; ++i)
+        pthread_join(threads[i], NULL);
 }
 
 int
