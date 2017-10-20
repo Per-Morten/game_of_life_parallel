@@ -62,8 +62,14 @@ sdl_shutdown(SDL_Window* window,
     SDL_Quit();
 }
 
+
+typedef bool cell;
+
 bool
-sdl_handle_events()
+handle_events(cell** grid,
+              const size_t rows,
+              const size_t cols,
+              bool* iterate)
 {
     SDL_Event event;
     while (SDL_PollEvent(&event))
@@ -74,11 +80,27 @@ sdl_handle_events()
         {
             return false;
         }
+
+        if (event.type == SDL_KEYUP &&
+            event.key.keysym.sym == SDLK_SPACE)
+        {
+            (*iterate) = !(*iterate);
+        }
+
+        if (event.type == SDL_MOUSEBUTTONUP)
+        {
+            const int selected_x = event.button.x / CELL_WIDTH;
+            const int selected_y = event.button.y / CELL_HEIGHT;
+
+            if (selected_x >= 0 && selected_x < rows &&
+                selected_y >= 0 && selected_y < cols)
+            {
+                grid[selected_x][selected_y] = !grid[selected_x][selected_y];
+            }
+        }
     }
     return true;
 }
-
-typedef bool cell;
 
 cell**
 create_grid(const size_t rows,
@@ -164,6 +186,7 @@ draw_grid(cell** grid,
                            prev_color.a);
 }
 
+
 int
 main(int argc, char** argv)
 {
@@ -175,18 +198,11 @@ main(int argc, char** argv)
     cell** grid = create_grid(CELL_COUNT, CELL_COUNT);
 
     bool should_continue = true;
+    bool iterate = false;
     while (should_continue)
     {
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            if (event.type == SDL_QUIT ||
-                (event.type == SDL_KEYUP &&
-                event.key.keysym.sym == SDLK_ESCAPE))
-            {
-                should_continue = false;
-            }
-        }
+        should_continue = handle_events(grid, CELL_COUNT,
+                                        CELL_COUNT, &iterate);
 
         SDL_RenderClear(renderer);
         draw_grid(grid,
