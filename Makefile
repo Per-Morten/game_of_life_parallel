@@ -36,4 +36,4 @@ run_leak_double_buffer: clean
 
 .PHONY: run_leak_non_double_buffer
 run_leak_non_double_buffer: clean
-	gcc -g3 -std=c11 -Wall -Wextra -fno-omit-frame-pointer -fsanitize=address non_double_buffer.c -o non_double_buffer_leak -lSDL2 -lpthread; ASAN_OPTIONS=detect_leaks=1; ./non_double_buffer_leak
+	gcc -g3 -Og -std=c11 -Wall -Wextra -fno-omit-frame-pointer -fsanitize=address non_double_buffer.c -o non_double_buffer_leak -lSDL2 -lpthread; ASAN_OPTIONS=detect_leaks=1; ./non_double_buffer_leak
