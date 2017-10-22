@@ -232,16 +232,16 @@ sub_update(cell* restrict curr,
         {
             int alive_neighbors = 0;
 
-            // left side
+            // Above
             alive_neighbors += prev[calc_cell_idx(i - 1, j - 1)];
             alive_neighbors += prev[calc_cell_idx(i - 1, j)];
             alive_neighbors += prev[calc_cell_idx(i - 1, j + 1)];
 
-            // above below
+            // Side
             alive_neighbors += prev[calc_cell_idx(i, j - 1)];
             alive_neighbors += prev[calc_cell_idx(i, j + 1)];
 
-            // right side
+            // Below
             alive_neighbors += prev[calc_cell_idx(i + 1, j - 1)];
             alive_neighbors += prev[calc_cell_idx(i + 1, j)];
             alive_neighbors += prev[calc_cell_idx(i + 1, j + 1)];
