@@ -1,6 +1,9 @@
 .PHONY: clean
 clean:
-	rm -f ./double_buffer ./double_buffer_leak ./single_threaded ./cond_double_buffer
+	rm -f ./double_buffer ./double_buffer_leak ./single_threaded ./cond_double_buffer ./non_double_buffer ./non_double_buffer_leak
+
+non_double_buffer: non_double_buffer.c
+	gcc -std=c11 -O3 -Wall -Wextra non_double_buffer.c -o non_double_buffer -lSDL2 -lpthread
 
 cond_double_buffer: cond_double_buffer.c
 	gcc -std=c11 -O3 -Wall -Wextra cond_double_buffer.c -o cond_double_buffer -lSDL2 -lpthread
@@ -23,6 +26,14 @@ run_double_buffer: clean double_buffer
 run_cond_double_buffer: clean cond_double_buffer
 	./cond_double_buffer
 
-.PHONY: clean leak_double_buffer
-leak_double_buffer:
+.PHONY: run_non_double_buffer
+run_non_double_buffer: clean non_double_buffer
+	./non_double_buffer
+
+.PHONY: run_leak_double_buffer
+run_leak_double_buffer: clean
 	gcc -g3 -std=c11 -Wall -Wextra -fno-omit-frame-pointer -fsanitize=address double_buffer.c -o double_buffer_leak -lSDL2 -lpthread; ASAN_OPTIONS=detect_leaks=1; ./double_buffer_leak
+
+.PHONY: run_leak_non_double_buffer
+run_leak_non_double_buffer: clean
+	gcc -g3 -std=c11 -Wall -Wextra -fno-omit-frame-pointer -fsanitize=address non_double_buffer.c -o non_double_buffer_leak -lSDL2 -lpthread; ASAN_OPTIONS=detect_leaks=1; ./non_double_buffer_leak
