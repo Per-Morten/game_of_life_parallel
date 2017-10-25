@@ -39,18 +39,28 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+//#define SLOW_UPDATE
+
 #define BORDER_WIDTH 1
-//#define CELL_WIDTH 100
-//#define CELL_HEIGHT 200
+#ifdef SLOW_UPDATE
 #define CELL_WIDTH 100
-#define CELL_HEIGHT 100
-#define WINDOW_WIDTH 800
-#define WINDOW_HEIGHT 800
+#define CELL_HEIGHT 200
+#else
+#define CELL_WIDTH 5
+#define CELL_HEIGHT 5
+#endif
+#define WINDOW_WIDTH 1280
+#define WINDOW_HEIGHT 720
 #define CELL_COL_COUNT (WINDOW_WIDTH / CELL_WIDTH)
 #define CELL_ROW_COUNT (WINDOW_HEIGHT / CELL_HEIGHT)
 #define CELL_COL_OFFSET 1
 #define CELL_ROW_OFFSET 1
+
+#ifdef SLOW_UPDATE
+#define THREAD_COUNT 1
+#else
 #define THREAD_COUNT 4
+#endif
 
 int
 sdl_init(SDL_Window** out_window,
@@ -169,7 +179,7 @@ create_grid(const size_t rows,
         for (size_t j = 0; j != cols; ++j)
         {
             size_t idx = calc_cell_idx(i, j);
-            grid[idx] = (i + 1) % 2 == 0;
+            grid[idx] = (i - 1) % 2 == 0;
         }
     }
 
@@ -293,6 +303,33 @@ sub_update(cell* restrict curr,
     return NULL;
 }
 
+void
+print_buffers(cell* above,
+              cell* curr,
+              cell* border,
+              size_t id)
+{
+    char buffer[4096];
+    char* info_buffer = buffer;
+    info_buffer += sprintf(info_buffer, "Id: %zu\nAbove: ", id);
+
+    for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+        info_buffer += sprintf(info_buffer, "%d", above[col]);
+
+    info_buffer += sprintf(info_buffer, "\nCurr:  ");
+
+    for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+        info_buffer += sprintf(info_buffer, "%d", curr[col]);
+
+    info_buffer += sprintf(info_buffer, "\nBelow: ");
+    for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+        info_buffer += sprintf(info_buffer, "%d", border[col]);
+
+    info_buffer += sprintf(info_buffer, "\n");
+
+    printf("%s\n", buffer);
+}
+
 void*
 sub_update_2(cell* restrict grid,
              cell* restrict above,
@@ -300,7 +337,8 @@ sub_update_2(cell* restrict grid,
              cell* restrict border,
              size_t row_begin,
              size_t row_end,
-             size_t cols)
+             size_t cols,
+             size_t id)
 {
     // Rules from: https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
     // Any live cell with fewer than two live neighbours dies, as if caused by underpopulation.
@@ -311,23 +349,33 @@ sub_update_2(cell* restrict grid,
     // Make sure that on last iteration, we check the border buffer
 
     // Need to stop one before, or at least change to the border buffer for checking below
+
+    //printf("Printing\n");
+
     for (size_t i = row_begin; i != row_end; ++i)
     {
+        memcpy(curr, &grid[calc_cell_idx(i, -1)], sizeof(cell) * (CELL_COL_COUNT + CELL_COL_OFFSET * 2));
+        #ifdef SLOW_UPDATE
+        system("clear");
+        print_buffers(above, curr, border, id);
+        #endif
         for (size_t j = 0; j != cols; ++j)
         {
             int alive_neighbors = 0;
 
             // Check form above buffer
             // Above
-
             alive_neighbors += above[j + CELL_COL_OFFSET - 1];
             alive_neighbors += above[j + CELL_COL_OFFSET];
             alive_neighbors += above[j + CELL_COL_OFFSET + 1];
+            int above_neighbors = alive_neighbors;
 
             // Check from current buffer
             // Side
+
             alive_neighbors += curr[j + CELL_COL_OFFSET - 1];
             alive_neighbors += curr[j + CELL_COL_OFFSET + 1];
+            int side_neighbors = alive_neighbors - above_neighbors;
 
             // Check from the actual memory area
             // Below
@@ -343,8 +391,10 @@ sub_update_2(cell* restrict grid,
                 alive_neighbors += border[j + CELL_COL_OFFSET];
                 alive_neighbors += border[j + CELL_COL_OFFSET + 1];
             }
+            int below_neighbors = alive_neighbors - side_neighbors - above_neighbors;
 
             size_t idx = calc_cell_idx(i, j);
+            #ifndef SLOW_UPDATE
             if (grid[idx])
             {
                 if (alive_neighbors < 2)
@@ -358,14 +408,22 @@ sub_update_2(cell* restrict grid,
             {
                 grid[idx] = true;
             }
-
-            memcpy(above, curr, sizeof(cell) * (CELL_COL_COUNT + CELL_COL_OFFSET * 2));
-            memcpy(curr, &grid[calc_cell_idx(i, j - 1)], sizeof(cell) * (CELL_COL_COUNT + CELL_COL_OFFSET * 2));
+            #else
+            printf("cols: %zu, row: %zu, col: %zu\n", cols, i, j);
+            printf("above_neighbors: %d\n", above_neighbors);
+            printf("side_neighbors: %d\n", side_neighbors);
+            printf("below_neighbors: %d\n", below_neighbors);
+            #endif
 
             // Set above to point to current
             // Set current to point to above
             // memcpy new_current into current
         }
+
+            memcpy(above, curr, (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
+        #ifdef SLOW_UPDATE
+        getc(stdin);
+        #endif
     }
 
     return NULL;
@@ -389,6 +447,8 @@ typedef struct
     atomic_int* signal;
     pthread_cond_t* cv;
     pthread_mutex_t* cv_mtx;
+
+    size_t id;
 } thread_params;
 
 void*
@@ -409,7 +469,7 @@ thread_execution(void* params)
         sub_update_2(args.grid, args.above_buffer,
                      args.current_buffer, args.border_buffer,
                      args.row_begin, args.row_end,
-                     args.cols);
+                     args.cols, args.id);
 
         atomic_fetch_add_explicit(args.signal, 1, memory_order_release);
     }
@@ -462,6 +522,7 @@ create_threads(cell* restrict grid,
         info.params[i].signal = info.signal;
         info.params[i].cv = info.cv;
         info.params[i].cv_mtx = info.cv_mtx;
+        info.params[i].id = i;
 
         info.params[i].above_buffer = malloc(CELL_COL_COUNT + CELL_COL_OFFSET * 2);
         info.params[i].current_buffer = malloc(CELL_COL_COUNT + CELL_COL_OFFSET * 2);
@@ -510,19 +571,43 @@ update_grid(thread_info* info)
     for (size_t i = 0; i != THREAD_COUNT; ++i)
     {
         const int above_row = calc_cell_idx((int)info->params[i].row_begin - 1, -1);
-        printf("i: %zu, above_row: %i\n", i, above_row);
+        //printf("i: %zu, above_row: %i\n", i, above_row);
         memcpy(info->params[i].above_buffer, &info->params[0].grid[above_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
 
         const int curr_row = calc_cell_idx((int)info->params[i].row_begin, -1);
-        printf("i: %zu, curr_row: %d\n", i, curr_row);
+        //printf("i: %zu, curr_row: %d\n", i, curr_row);
         memcpy(info->params[i].current_buffer, &info->params[0].grid[curr_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
 
 
         const int border_row = calc_cell_idx((int)info->params[i].row_end, -1);
-        printf("i: %zu, border_row: %d\n", i, border_row);
+        //printf("i: %zu, border_row: %d\n", i, border_row);
         memcpy(info->params[i].border_buffer, &info->params[0].grid[border_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
     }
 
+    // for (size_t row = 0; row != CELL_ROW_COUNT; ++row)
+    // {
+    //     for (size_t col = 0; col != CELL_COL_COUNT; ++col)
+    //     {
+    //         printf("%d", info->params[0].grid[calc_cell_idx(row, col)]);
+    //     }
+    //     printf("\n");
+    // }
+    // printf("\n");
+
+    // printf("Above: \n");
+    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+    //     printf("%d", info->params[0].above_buffer[col]);
+
+    // printf("\nCurr: \n");
+    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+    //     printf("%d", info->params[0].current_buffer[col]);
+
+    // printf("\nBelow: \n");
+    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
+    //     printf("%d", info->params[0].border_buffer[col]);
+    // printf("\n");
+
+    system("clear");
 
     /// Awake all threads
     pthread_cond_broadcast(info->cv);
@@ -534,7 +619,7 @@ update_grid(thread_info* info)
     sub_update_2(info->params[0].grid, info->params[0].above_buffer,
                  info->params[0].current_buffer, info->params[0].border_buffer,
                  info->params[0].row_begin, info->params[0].row_end,
-                 info->params[0].cols);
+                 info->params[0].cols, info->params[0].id);
 
     int expected = THREAD_COUNT - 1;
     while (!atomic_compare_exchange_weak_explicit(info->signal,
@@ -545,6 +630,7 @@ update_grid(thread_info* info)
     {
         expected = THREAD_COUNT - 1;
     }
+
 }
 
 int
@@ -577,6 +663,8 @@ main(int argc, char** argv)
             update_grid(&threads);
 
         copy_grid(prev_grid, curr_grid, CELL_ROW_COUNT, CELL_COL_COUNT);
+
+
 
         SDL_RenderClear(renderer);
         draw_grid(prev_grid,
