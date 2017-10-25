@@ -35,6 +35,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <SDL2/SDL.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -115,7 +116,7 @@ sdl_shutdown(SDL_Window* window,
     SDL_Quit();
 }
 
-typedef bool cell;
+typedef uint8_t cell;
 
 size_t
 calc_cell_idx(const int row, // Which y position
