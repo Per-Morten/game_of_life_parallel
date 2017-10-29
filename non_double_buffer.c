@@ -31,7 +31,6 @@
 ///         for a grid,
 ///       - Adds extra computation (might be worth it)
 ///
-///
 /// - Restriction to make bit patterns work
 ///     Total columns per row
 ///     (i.e. CELL_COL_COUNT + CELL_COL_OFFSET * 2),
@@ -51,28 +50,9 @@
 #include <pthread.h>
 #include <SDL2/SDL.h>
 
-//#define SLOW_UPDATE
-
 #define BORDER_WIDTH 1
-#ifndef SLOW_UPDATE
-//#define CELL_WIDTH 42
-//#define CELL_HEIGHT 42
-//#define CELL_WIDTH 8
-//#define CELL_HEIGHT 8
-//#else
-//#define CELL_WIDTH 100
-//#define CELL_HEIGHT 200
-#endif
-//#define WINDOW_WIDTH 600
-//#define WINDOW_HEIGHT 600
-//1920 × 1080
-//1280 × 720
-//1920 × 1200
-//1280 × 800
 #define WINDOW_WIDTH 1024
 #define WINDOW_HEIGHT 768
-//#define CELL_COL_COUNT (WINDOW_WIDTH / CELL_WIDTH)
-//#define CELL_ROW_COUNT (WINDOW_HEIGHT / CELL_HEIGHT)
 #define CELL_TOT_COL 128
 #define CELL_TOT_ROW 130
 #define CELL_COL_OFFSET 1
@@ -155,8 +135,8 @@ size_t
 get_byte_idx(const int row,
              const int col)
 {
-    const size_t row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-    const size_t row_byte = (col + CELL_COL_OFFSET) / 8;
+    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
     return row_idx + row_byte;
 }
 
@@ -166,10 +146,10 @@ set_cell(cell* grid,
          const int col,
          bool val)
 {
-    const size_t row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-    const size_t row_byte = (col + CELL_COL_OFFSET) / 8;
-    const size_t byte_idx = row_idx + row_byte;
-    const size_t bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
+    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
+    const int byte_idx = row_idx + row_byte;
+    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
 
     if (val)
         grid[byte_idx] |= (1 << bit_idx);
@@ -201,14 +181,16 @@ get_cell_from_row(cell* row,
 
 void
 copy_row(cell* restrict dst,
-         cell* restrict src)
+         cell* restrict src,
+         const size_t cols)
 {
-    int size = (CELL_TOT_COL) / 8;
+    int size = (cols + CELL_COL_OFFSET * 2) / 8;
     memcpy(dst, src, size);
 }
 
 
-cell* create_row(const size_t cols)
+cell*
+create_row(const size_t cols)
 {
     const size_t outer_cols = (cols + CELL_COL_OFFSET * 2) / 8;
     return calloc(outer_cols, sizeof(cell));
@@ -226,7 +208,7 @@ print_row(cell* row,
         }
         printf(" ");
     }
-        printf("\n");
+    printf("\n");
 }
 
 cell*
@@ -246,11 +228,6 @@ create_grid(const size_t rows,
         for (size_t j = 0; j != cols; ++j)
         {
             set_cell(grid, i, j, ((i - 1) % 2 == 0));
-            //int row = (i + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-            //int row_byte = (j + CELL_COL_OFFSET) / 8;
-            //int byte_idx = row + row_byte;
-            //int bit_idx = (j + (row_byte != 0)) % 8 + (row_byte == 0);
-            //grid[byte_idx] |= (i % 2) << bit_idx;
         }
     }
 
@@ -314,7 +291,6 @@ draw_grid(cell* grid,
     {
         for (size_t j = 0; j != cols; ++j)
         {
-            //size_t idx = calc_cell_idx(i, j);
             if (get_cell(grid, i, j))
             {
                 SDL_Rect rect =
@@ -337,33 +313,6 @@ draw_grid(cell* grid,
                            prev_color.a);
 }
 
-void
-print_buffers(cell* above,
-              cell* curr,
-              cell* border,
-              size_t id)
-{
-    char buffer[4096];
-    char* info_buffer = buffer;
-    info_buffer += sprintf(info_buffer, "Id: %zu\nAbove: ", id);
-
-    for (int col = -1; col != CELL_COL_COUNT + CELL_COL_OFFSET; ++col)
-        info_buffer += sprintf(info_buffer, "%d", get_cell_from_row(above, col));
-
-    info_buffer += sprintf(info_buffer, "\nCurr:  ");
-
-    for (int col = -1; col != CELL_COL_COUNT + CELL_COL_OFFSET; ++col)
-        info_buffer += sprintf(info_buffer, "%d", get_cell_from_row(curr, col));
-
-    info_buffer += sprintf(info_buffer, "\nBelow: ");
-    for (int col = -1; col != CELL_COL_COUNT + CELL_COL_OFFSET; ++col)
-        info_buffer += sprintf(info_buffer, "%d", get_cell_from_row(border, col));
-
-    info_buffer += sprintf(info_buffer, "\n");
-
-    printf("%s\n", buffer);
-}
-
 void*
 sub_update(cell* restrict grid,
            cell* restrict above,
@@ -380,28 +329,16 @@ sub_update(cell* restrict grid,
     // Any live cell with more than three live neighbours dies, as if by overpopulation.
     // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
 
+    // Lives if: 3, or alive and 2
+    // Dies if: < 2-3 <
+
     // Make sure that on last iteration, we check the border buffer
 
     // Need to stop one before, or at least change to the border buffer for checking below
-
-    //printf("Printing\n");
-
-    // For debugging purposes, will be removed when solution is working and go back to using curr and border
-    //cell below[CELL_COL_COUNT + CELL_COL_OFFSET * 2];
-
     for (size_t i = row_begin; i != row_end; ++i)
     {
-        copy_row(curr, &grid[get_byte_idx(i, -1)]);
-        //if (i < row_end - 1)
-        //    copy_row(below, &grid[get_byte_idx(i + 1, -1)]);
-        //else
-        //    copy_row(below, border);
+        copy_row(curr, &grid[get_byte_idx(i, -1)], cols);
 
-
-        #ifdef SLOW_UPDATE
-        system("clear");
-        print_buffers(above, curr, below, id);
-        #endif
         for (size_t j = 0; j != cols; ++j)
         {
             int alive_neighbors = 0;
@@ -411,14 +348,11 @@ sub_update(cell* restrict grid,
             alive_neighbors += get_cell_from_row(above, j - 1);
             alive_neighbors += get_cell_from_row(above, j);
             alive_neighbors += get_cell_from_row(above, j + 1);
-            int above_neighbors = alive_neighbors;
 
             // Check from current buffer
             // Side
-
             alive_neighbors += get_cell_from_row(curr, j - 1);
             alive_neighbors += get_cell_from_row(curr, j + 1);
-            int side_neighbors = alive_neighbors - above_neighbors;
 
             // Check from the actual memory area
             // Below
@@ -434,38 +368,14 @@ sub_update(cell* restrict grid,
                 alive_neighbors += get_cell_from_row(border, j);
                 alive_neighbors += get_cell_from_row(border, j + 1);
             }
-            int below_neighbors = alive_neighbors - side_neighbors - above_neighbors;
 
-            //size_t idx = calc_cell_idx(i, j);
-            #ifndef SLOW_UPDATE
-            if (get_cell(grid, i, j))
-            {
-                if (alive_neighbors < 2 || alive_neighbors > 3)
-                    set_cell(grid, i, j, false);
-                else
-                    set_cell(grid, i, j, true);
-            }
-            else if (alive_neighbors == 3)
-            {
-                set_cell(grid, i, j, true);
-            }
-            #else
-            printf("cols: %zu, row: %zu, col: %zu\n", cols, i, j);
-            printf("above_neighbors: %d\n", above_neighbors);
-            printf("side_neighbors: %d\n", side_neighbors);
-            printf("below_neighbors: %d\n", below_neighbors);
-            #endif
+            bool val = (alive_neighbors == 3 ||
+                        (get_cell(grid, i, j) && alive_neighbors == 2));
+            set_cell(grid, i, j, val);
 
-            // Set above to point to current
-            // Set current to point to above
-            // memcpy new_current into current
         }
 
-        copy_row(above, curr);
-            //memcpy(above, curr, (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
-        #ifdef SLOW_UPDATE
-        getc(stdin);
-        #endif
+        copy_row(above, curr, cols);
     }
 
     return NULL;
@@ -475,7 +385,6 @@ sub_update(cell* restrict grid,
 typedef struct
 {
     cell* restrict grid;
-    cell* restrict prev;
     size_t row_begin;
     size_t row_end;
     size_t cols;
@@ -529,7 +438,6 @@ typedef struct
 
 thread_info
 create_threads(cell* restrict grid,
-               cell* restrict prev,
                const size_t rows,
                const size_t cols)
 {
@@ -552,7 +460,6 @@ create_threads(cell* restrict grid,
     for (size_t i = 0; i != THREAD_COUNT; ++i)
     {
         info.params[i].grid = grid;
-        info.params[i].prev = prev;
         info.params[i].row_begin = (rows / THREAD_COUNT) * i;
         info.params[i].row_end = (rows / THREAD_COUNT) * (i + 1);
         info.params[i].cols = cols;
@@ -562,9 +469,6 @@ create_threads(cell* restrict grid,
         info.params[i].cv_mtx = info.cv_mtx;
         info.params[i].id = i;
 
-        //info.params[i].above_buffer = malloc(CELL_COL_COUNT + CELL_COL_OFFSET * 2);
-        //info.params[i].current_buffer = malloc(CELL_COL_COUNT + CELL_COL_OFFSET * 2);
-        //info.params[i].border_buffer = malloc(CELL_COL_COUNT + CELL_COL_OFFSET * 2);
         info.params[i].above_buffer = create_row(CELL_COL_COUNT);
         info.params[i].current_buffer = create_row(CELL_COL_COUNT);
         info.params[i].border_buffer = create_row(CELL_COL_COUNT);
@@ -591,7 +495,6 @@ destroy_threads(thread_info* info)
         free(info->params[i].above_buffer);
         free(info->params[i].current_buffer);
         free(info->params[i].border_buffer);
-
     }
 
     pthread_cond_destroy(info->cv);
@@ -607,66 +510,30 @@ destroy_threads(thread_info* info)
 void
 update_grid(thread_info* info)
 {
-    /// Memcpy in all sub buffers
-
+    // memcpy in all buffers where races might occur
     for (size_t i = 0; i != THREAD_COUNT; ++i)
     {
         const int above_row = get_byte_idx((int)info->params[i].row_begin - 1, -1);
-        copy_row(info->params[i].above_buffer, &info->params[0].grid[above_row]);
-        //printf("i: %zu, above_row: %i\n", i, above_row);
-        //memcpy(info->params[i].above_buffer, &info->params[0].grid[above_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
-
-        const int curr_row = get_byte_idx((int)info->params[i].row_begin, -1);
-        copy_row(info->params[i].current_buffer, &info->params[0].grid[curr_row]);
-        //printf("i: %zu, curr_row: %d\n", i, curr_row);
-        //memcpy(info->params[i].current_buffer, &info->params[0].grid[curr_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
-
+        copy_row(info->params[i].above_buffer,
+                 &info->params[0].grid[above_row],
+                 info->params[i].cols);
 
         const int border_row = get_byte_idx((int)info->params[i].row_end, -1);
-        //printf("i: %zu, border_row: %d\n", i, border_row);
-        copy_row(info->params[i].border_buffer, &info->params[0].grid[border_row]);
-        //memcpy(info->params[i].border_buffer, &info->params[0].grid[border_row], (CELL_COL_COUNT + CELL_COL_OFFSET * 2) * sizeof(cell));
+        copy_row(info->params[i].border_buffer,
+                 &info->params[0].grid[border_row],
+                 info->params[i].cols);
     }
 
-    // for (size_t row = 0; row != CELL_ROW_COUNT; ++row)
-    // {
-    //     for (size_t col = 0; col != CELL_COL_COUNT; ++col)
-    //     {
-    //         printf("%d", info->params[0].grid[calc_cell_idx(row, col)]);
-    //     }
-    //     printf("\n");
-    // }
-    // printf("\n");
-
-    // printf("Above: \n");
-    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
-    //     printf("%d", info->params[0].above_buffer[col]);
-
-    // printf("\nCurr: \n");
-    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
-    //     printf("%d", info->params[0].current_buffer[col]);
-
-    // printf("\nBelow: \n");
-    // for (size_t col = 0; col != CELL_COL_COUNT + CELL_COL_OFFSET * 2; ++col)
-    //     printf("%d", info->params[0].border_buffer[col]);
-    // printf("\n");
-
-    #ifdef SLOW_UPDATE
-    system("clear");
-    #endif
-
-    /// Awake all threads
+    // Awake all threads
     pthread_cond_broadcast(info->cv);
-
-    //sub_update(info->params[0].curr, info->params[0].prev,
-    //           info->params[0].row_begin, info->params[0].row_end,
-    //           info->params[0].cols);
 
     sub_update(info->params[0].grid, info->params[0].above_buffer,
                info->params[0].current_buffer, info->params[0].border_buffer,
                info->params[0].row_begin, info->params[0].row_end,
                info->params[0].cols, info->params[0].id);
 
+    // Just spinning in place, as the threads are given the same amount of work
+    // they should not be that far away from each other in terms of time.
     int expected = THREAD_COUNT - 1;
     while (!atomic_compare_exchange_weak_explicit(info->signal,
                                                   &expected,
@@ -689,12 +556,9 @@ main(int argc, char** argv)
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 
-    //cell* prev_grid = create_grid(CELL_ROW_COUNT, CELL_COL_COUNT);
     cell* curr_grid = create_grid(CELL_ROW_COUNT, CELL_COL_COUNT);
-    //copy_grid(prev_grid, curr_grid, CELL_ROW_COUNT, CELL_COL_COUNT);
 
     thread_info threads = create_threads(curr_grid,
-                                         NULL,
                                          CELL_ROW_COUNT,
                                          CELL_COL_COUNT);
 
@@ -707,10 +571,6 @@ main(int argc, char** argv)
 
         if (iterate)
             update_grid(&threads);
-
-        //copy_grid(prev_grid, curr_grid, CELL_ROW_COUNT, CELL_COL_COUNT);
-
-
 
         SDL_RenderClear(renderer);
         draw_grid(curr_grid,
@@ -725,7 +585,6 @@ main(int argc, char** argv)
 
     destroy_threads(&threads);
 
-    //free(prev_grid);
     free(curr_grid);
 
     sdl_shutdown(window, renderer);
