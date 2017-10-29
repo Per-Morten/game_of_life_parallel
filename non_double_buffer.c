@@ -1,6 +1,7 @@
-///////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
 /// Non double buffered solution.
 /// Line of thought:
+/// - Buffering:
 ///     Cellular automata requires some sort of buffering,
 ///     as the new state depends on the last one.
 ///     However, theoretically you only need to buffer
@@ -15,12 +16,11 @@
 ///     This is so that the potentially updated updated
 ///     border cannot affect the result of the last
 ///     row in a threads working area.
+/// - Bounds checking:
+///     Decided to avoid bounds checking by adding a border
+///     around the entire grid.
 ///
-/// Todo:
-/// -   Ensure that the memory ordering is actually
-///     correct. (It should be, I think)
-///
-/// Thoughts:
+/// Thoughts/Reflections:
 /// -   Can probably shrink or get rid of thread_params
 ///     structure.
 ///     Can calculate begin, end for example.
@@ -29,6 +29,17 @@
 ///     mean that we could just use the thread_info
 ///     and would not need to point back into it with
 ///     thread_params.
+/// -   Can probably add some attributes to help compiler,
+///     for example, most cells will not be alive, so can
+///     do a expects solution.
+/// -   Should decide on using int or size_t, unlike C++
+///     size_t doesn't actually give me anything int
+///     doesn't. I had to semi convert to int to get copying
+///     of borders to work, so might as well go all the way.
+/// -   Should be consistent on what is macros and what is
+///     parameters?
+///     Threads are decided by macro, solutions in functions
+///     while grid size is sent as parameters to functions.
 ///
 /// Other Ideas:
 /// -   Two threads start at opposite sides and different
@@ -53,7 +64,7 @@
 ///     Solution to avoiding this could be to pad each
 ///     row on both sides.
 ///     But currently I just go for multiple of 8 solution
-///////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -109,7 +120,7 @@ set_cell(cell* grid,
     const int row_byte = (col + CELL_COL_OFFSET) / 8;
     const int byte_idx = row_idx + row_byte;
 
-    // Conditionally skipping one bit if we are in border
+    // Conditionally skipping one bit if we are in byte which has border
     const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
 
     if (val)
@@ -132,7 +143,7 @@ get_cell(const cell* grid,
 }
 
 bool
-get_cell_from_row(cell* row,
+get_cell_from_row(const cell* row,
                   const int col)
 {
     const int row_byte = (col + CELL_COL_OFFSET) / 8;
@@ -142,7 +153,7 @@ get_cell_from_row(cell* row,
 
 void
 copy_row(cell* restrict dst,
-         cell* restrict src,
+         const cell* restrict src,
          const size_t cols)
 {
     int size = (cols + CELL_COL_OFFSET * 2) / 8;
