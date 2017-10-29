@@ -1,8 +1,26 @@
 ///////////////////////////////////////////////////////////
-/// Double buffered solution using cond variables etc
-/// to avoid recreating threads all the time.
+/// Non double buffered solution.
+/// Line of thought:
+///     Cellular automata requires some sort of buffering,
+///     as the new state depends on the last one.
+///     However, theoretically you only need to buffer
+///     the row above you, the cells to the left of
+///     current cell, assuming traversal left to right.
+///     In practice this essentially means two row buffers,
+///     One for above, and one for current.
+///     When introducing multiple threads, each thread
+///     needs 3 buffers.
+///     The two normal ones (above and current),
+///     and 1 for the border of the thread below.
+///     This is so that the potentially updated updated
+///     border cannot affect the result of the last
+///     row in a threads working area.
 ///
 /// Todo:
+/// -   Ensure that the memory ordering is actually
+///     correct. (It should be, I think)
+///
+/// Thoughts:
 /// -   Can probably shrink or get rid of thread_params
 ///     structure.
 ///     Can calculate begin, end for example.
@@ -12,12 +30,7 @@
 ///     and would not need to point back into it with
 ///     thread_params.
 ///
-/// -   Ensure that the memory ordering is actually
-///     correct.
-///
-/// -   Move to bit pattern rather than bools.
-///
-/// Ideas:
+/// Other Ideas:
 /// -   Two threads start at opposite sides and different
 ///     rows, and work their way towards a shared middle,
 ///     the upper thread always takes the middle path.
@@ -39,7 +52,7 @@
 ///     as we cannot address one bit.
 ///     Solution to avoiding this could be to pad each
 ///     row on both sides.
-///     But currently I just go for multiply of 8 solution
+///     But currently I just go for multiple of 8 solution
 ///////////////////////////////////////////////////////////
 
 #include <stdatomic.h>
@@ -62,11 +75,7 @@
 #define CELL_WIDTH (WINDOW_WIDTH / CELL_COL_COUNT)
 #define CELL_HEIGHT (WINDOW_HEIGHT / CELL_ROW_COUNT)
 
-#ifdef SLOW_UPDATE
-#define THREAD_COUNT 1
-#else
 #define THREAD_COUNT 8
-#endif
 
 #if ((CELL_TOT_COL) % 8 != 0)
 #error "CELL_TOT_COL is not multiple of 8"
@@ -76,6 +85,184 @@
 #error "CELL_ROW_COUNT is not multiple of THREAD_COUNT"
 #endif
 
+///////////////////////////////////////////////////////////
+/// Grid
+///////////////////////////////////////////////////////////
+typedef uint8_t cell;
+
+size_t
+get_byte_idx(const int row,
+             const int col)
+{
+    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
+    return row_idx + row_byte;
+}
+
+void
+set_cell(cell* grid,
+         const int row,
+         const int col,
+         bool val)
+{
+    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
+    const int byte_idx = row_idx + row_byte;
+
+    // Conditionally skipping one bit if we are in border
+    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
+
+    if (val)
+        grid[byte_idx] |= (1 << bit_idx);
+    else
+        grid[byte_idx] &= ~(1 << bit_idx);
+}
+
+bool
+get_cell(const cell* grid,
+         const int row,
+         const int col)
+{
+    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
+    const int byte_idx = row_idx + row_byte;
+    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
+
+    return grid[byte_idx] & (1 << bit_idx);
+}
+
+bool
+get_cell_from_row(cell* row,
+                  const int col)
+{
+    const int row_byte = (col + CELL_COL_OFFSET) / 8;
+    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
+    return row[row_byte] & (1 << bit_idx);
+}
+
+void
+copy_row(cell* restrict dst,
+         cell* restrict src,
+         const size_t cols)
+{
+    int size = (cols + CELL_COL_OFFSET * 2) / 8;
+    memcpy(dst, src, size);
+}
+
+
+cell*
+create_row(const size_t cols)
+{
+    const size_t outer_cols = (cols + CELL_COL_OFFSET * 2) / 8;
+    return calloc(outer_cols, sizeof(cell));
+}
+
+// Kept for debug purposes.
+void
+print_row(cell* row,
+          const size_t col_count)
+{
+    for (size_t i = 0; i < col_count; ++i)
+    {
+        for (size_t j = 0; j < 8; ++j)
+        {
+            printf("%d", (row[i] & (1 << j)) >> j);
+        }
+        printf(" ");
+    }
+    printf("\n");
+}
+
+void*
+sub_update(cell* restrict grid,
+           cell* restrict above,
+           cell* restrict curr,
+           cell* restrict border,
+           size_t row_begin,
+           size_t row_end,
+           size_t cols,
+           size_t id)
+{
+    // Rules from: https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
+    // Any live cell with fewer than two live neighbours dies, as if caused by underpopulation.
+    // Any live cell with two or three live neighbours lives on to the next generation.
+    // Any live cell with more than three live neighbours dies, as if by overpopulation.
+    // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
+
+    for (size_t i = row_begin; i != row_end; ++i)
+    {
+        copy_row(curr, &grid[get_byte_idx(i, -1)], cols);
+
+        for (size_t j = 0; j != cols; ++j)
+        {
+            int alive_neighbors = 0;
+
+            // Check form above buffer
+            // Above
+            alive_neighbors += get_cell_from_row(above, j - 1);
+            alive_neighbors += get_cell_from_row(above, j);
+            alive_neighbors += get_cell_from_row(above, j + 1);
+
+            // Check from current buffer
+            // Side
+            alive_neighbors += get_cell_from_row(curr, j - 1);
+            alive_neighbors += get_cell_from_row(curr, j + 1);
+
+            // Need to use buffer if we are closing in on row_end
+            // as that position in grid has probably been updated by thread below.
+            // Below
+            if (i < row_end - 1)
+            {
+                alive_neighbors += get_cell(grid, i + 1, j - 1);
+                alive_neighbors += get_cell(grid, i + 1, j);
+                alive_neighbors += get_cell(grid, i + 1, j + 1);
+            }
+            else
+            {
+                alive_neighbors += get_cell_from_row(border, j - 1);
+                alive_neighbors += get_cell_from_row(border, j);
+                alive_neighbors += get_cell_from_row(border, j + 1);
+            }
+
+            bool val = (alive_neighbors == 3 ||
+                        (get_cell(grid, i, j) && alive_neighbors == 2));
+            set_cell(grid, i, j, val);
+
+        }
+
+        copy_row(above, curr, cols);
+    }
+
+    return NULL;
+}
+
+
+cell*
+create_grid(const size_t rows,
+            const size_t cols)
+{
+    // Creating an outer layer for the grid,
+    // allowing us to drop the bounds checking.
+    const size_t outer_rows = rows + CELL_ROW_OFFSET * 2;
+    const size_t outer_cols = (cols + CELL_COL_OFFSET * 2) / 8;
+
+    cell* grid = calloc(outer_rows * outer_cols, sizeof(cell));
+
+    // Set an initial state
+    for (size_t i = 0; i != rows; ++i)
+    {
+        for (size_t j = 0; j != cols; ++j)
+        {
+            set_cell(grid, i, j, ((i - 1) % 2 == 0));
+        }
+    }
+
+    return grid;
+}
+
+///////////////////////////////////////////////////////////
+/// SDL
+///////////////////////////////////////////////////////////
 int
 sdl_init(SDL_Window** out_window,
          SDL_Renderer** out_renderer,
@@ -127,111 +314,6 @@ sdl_shutdown(SDL_Window* window,
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-}
-
-typedef uint8_t cell;
-
-size_t
-get_byte_idx(const int row,
-             const int col)
-{
-    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-    const int row_byte = (col + CELL_COL_OFFSET) / 8;
-    return row_idx + row_byte;
-}
-
-void
-set_cell(cell* grid,
-         const int row,
-         const int col,
-         bool val)
-{
-    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-    const int row_byte = (col + CELL_COL_OFFSET) / 8;
-    const int byte_idx = row_idx + row_byte;
-    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
-
-    if (val)
-        grid[byte_idx] |= (1 << bit_idx);
-    else
-        grid[byte_idx] &= ~(1 << bit_idx);
-}
-
-bool
-get_cell(cell* grid,
-         const int row,
-         const int col)
-{
-    const int row_idx = (row + CELL_ROW_OFFSET) * (CELL_TOT_COL / 8);
-    const int row_byte = (col + CELL_COL_OFFSET) / 8;
-    const int byte_idx = row_idx + row_byte;
-    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
-
-    return grid[byte_idx] & (1 << bit_idx);
-}
-
-bool
-get_cell_from_row(cell* row,
-                  const int col)
-{
-    const int row_byte = (col + CELL_COL_OFFSET) / 8;
-    const int bit_idx = (col + (row_byte != 0)) % 8 + (row_byte == 0);
-    return row[row_byte] & (1 << bit_idx);
-}
-
-void
-copy_row(cell* restrict dst,
-         cell* restrict src,
-         const size_t cols)
-{
-    int size = (cols + CELL_COL_OFFSET * 2) / 8;
-    memcpy(dst, src, size);
-}
-
-
-cell*
-create_row(const size_t cols)
-{
-    const size_t outer_cols = (cols + CELL_COL_OFFSET * 2) / 8;
-    return calloc(outer_cols, sizeof(cell));
-}
-
-void
-print_row(cell* row,
-          const size_t col_count)
-{
-    for (size_t i = 0; i < col_count; ++i)
-    {
-        for (size_t j = 0; j < 8; ++j)
-        {
-            printf("%d", (row[i] & (1 << j)) >> j);
-        }
-        printf(" ");
-    }
-    printf("\n");
-}
-
-cell*
-create_grid(const size_t rows,
-            const size_t cols)
-{
-    // Creating an outer layer for the grid,
-    // allowing us to drop the bounds checking.
-    const size_t outer_rows = rows + CELL_ROW_OFFSET * 2;
-    const size_t outer_cols = (cols + CELL_COL_OFFSET * 2) / 8;
-
-    cell* grid = calloc(outer_rows * outer_cols, sizeof(cell));
-
-    // Set an initial state
-    for (size_t i = 0; i != rows; ++i)
-    {
-        for (size_t j = 0; j != cols; ++j)
-        {
-            set_cell(grid, i, j, ((i - 1) % 2 == 0));
-        }
-    }
-
-    return grid;
 }
 
 bool
@@ -313,74 +395,9 @@ draw_grid(cell* grid,
                            prev_color.a);
 }
 
-void*
-sub_update(cell* restrict grid,
-           cell* restrict above,
-           cell* restrict curr,
-           cell* restrict border,
-           size_t row_begin,
-           size_t row_end,
-           size_t cols,
-           size_t id)
-{
-    // Rules from: https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
-    // Any live cell with fewer than two live neighbours dies, as if caused by underpopulation.
-    // Any live cell with two or three live neighbours lives on to the next generation.
-    // Any live cell with more than three live neighbours dies, as if by overpopulation.
-    // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
-
-    // Lives if: 3, or alive and 2
-    // Dies if: < 2-3 <
-
-    // Make sure that on last iteration, we check the border buffer
-
-    // Need to stop one before, or at least change to the border buffer for checking below
-    for (size_t i = row_begin; i != row_end; ++i)
-    {
-        copy_row(curr, &grid[get_byte_idx(i, -1)], cols);
-
-        for (size_t j = 0; j != cols; ++j)
-        {
-            int alive_neighbors = 0;
-
-            // Check form above buffer
-            // Above
-            alive_neighbors += get_cell_from_row(above, j - 1);
-            alive_neighbors += get_cell_from_row(above, j);
-            alive_neighbors += get_cell_from_row(above, j + 1);
-
-            // Check from current buffer
-            // Side
-            alive_neighbors += get_cell_from_row(curr, j - 1);
-            alive_neighbors += get_cell_from_row(curr, j + 1);
-
-            // Check from the actual memory area
-            // Below
-            if (i < row_end - 1)
-            {
-                alive_neighbors += get_cell(grid, i + 1, j - 1);
-                alive_neighbors += get_cell(grid, i + 1, j);
-                alive_neighbors += get_cell(grid, i + 1, j + 1);
-            }
-            else
-            {
-                alive_neighbors += get_cell_from_row(border, j - 1);
-                alive_neighbors += get_cell_from_row(border, j);
-                alive_neighbors += get_cell_from_row(border, j + 1);
-            }
-
-            bool val = (alive_neighbors == 3 ||
-                        (get_cell(grid, i, j) && alive_neighbors == 2));
-            set_cell(grid, i, j, val);
-
-        }
-
-        copy_row(above, curr, cols);
-    }
-
-    return NULL;
-}
-
+///////////////////////////////////////////////////////////
+/// Threads
+///////////////////////////////////////////////////////////
 // Contains all information needed by a single thread to run.
 typedef struct
 {
@@ -405,20 +422,20 @@ typedef struct
 void*
 thread_execution(void* params)
 {
-    thread_params args = *(thread_params*)params;
-    while (atomic_load_explicit(args.running,
+    thread_params* args = (thread_params*)params;
+    while (atomic_load_explicit(args->running,
                                 memory_order_relaxed))
     {
-        pthread_mutex_lock(args.cv_mtx);
-        pthread_cond_wait(args.cv, args.cv_mtx);
-        pthread_mutex_unlock(args.cv_mtx);
+        pthread_mutex_lock(args->cv_mtx);
+        pthread_cond_wait(args->cv, args->cv_mtx);
+        pthread_mutex_unlock(args->cv_mtx);
 
-        sub_update(args.grid, args.above_buffer,
-                   args.current_buffer, args.border_buffer,
-                   args.row_begin, args.row_end,
-                   args.cols, args.id);
+        sub_update(args->grid, args->above_buffer,
+                   args->current_buffer, args->border_buffer,
+                   args->row_begin, args->row_end,
+                   args->cols, args->id);
 
-        atomic_fetch_add_explicit(args.signal, 1, memory_order_release);
+        atomic_fetch_add_explicit(args->signal, 1, memory_order_release);
     }
 
     return NULL;
@@ -426,6 +443,7 @@ thread_execution(void* params)
 
 // Holds all variables that needs to be deallocated,
 // and that is used to communicate between threads.
+// This structure should be merged together with thread_params.
 typedef struct
 {
     atomic_bool* running;
@@ -593,7 +611,6 @@ main(int argc, char** argv)
            CELL_TOT_ROW,
            CELL_TOT_COL,
            CELL_TOT_COL * CELL_TOT_ROW);
-    printf("width: %d, height: %d\n", CELL_WIDTH, CELL_HEIGHT);
 
     return 0;
 }
